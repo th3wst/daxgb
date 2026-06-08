@@ -1,0 +1,6 @@
+obj/
+daxgb_emulator
+*.gb
+*.state
+*.log
+*.sav

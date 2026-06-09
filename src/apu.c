@@ -6,15 +6,18 @@
 static uint8_t apu_ram[0x30]; 
 static SDL_AudioDeviceID audio_device;
 
-//Math for pitch perfection (need to work on this issue)
 static uint64_t apu_timer = 0; 
-
 static float audio_buffer[1024];
 static int audio_buffer_index = 0;
 
-
 static int frame_sequencer_cycles = 0;
 static int frame_sequencer_step = 0;
+
+// High-Pass Filter State variables to remove DC Offset
+static float hpf_left_prev_in = 0.0f;
+static float hpf_left_prev_out = 0.0f;
+static float hpf_right_prev_in = 0.0f;
+static float hpf_right_prev_out = 0.0f;
 
 //Channels
 static bool ch1_enabled = false; static int ch1_length_timer = 0; static uint8_t ch1_volume = 0; static int ch1_volume_timer = 0; static float ch1_phase = 0.0f; static int ch1_sweep_timer = 0;
@@ -25,12 +28,23 @@ static bool ch4_enabled = false; static int ch4_length_timer = 0; static uint8_t
 static const float DUTY_CYCLES[4] = { 0.125f, 0.250f, 0.500f, 0.750f };
 static const int NOISE_DIVISORS[8] = { 8, 16, 32, 48, 64, 80, 96, 112 };
 
+// A simple First-Order High-Pass Filter to center the waveform
+static float apply_hpf(float in, float *prev_in, float *prev_out) {
+    float out = in - *prev_in + 0.995f * (*prev_out);
+    *prev_in = in;
+    *prev_out = out;
+    return out;
+}
+
 void apu_init(void) {
     memset(apu_ram, 0, sizeof(apu_ram));
     apu_timer = 0;
     frame_sequencer_cycles = 0;
     frame_sequencer_step = 0;
     audio_buffer_index = 0;
+    
+    hpf_left_prev_in = 0.0f; hpf_left_prev_out = 0.0f;
+    hpf_right_prev_in = 0.0f; hpf_right_prev_out = 0.0f;
     
     ch1_enabled = false; ch1_length_timer = 0; ch1_volume = 0; ch1_volume_timer = 0; ch1_phase = 0.0f; ch1_sweep_timer = 0;
     ch2_enabled = false; ch2_length_timer = 0; ch2_volume = 0; ch2_volume_timer = 0; ch2_phase = 0.0f;
@@ -163,74 +177,94 @@ void apu_step(int cycles) {
 
         if (apu_ram[0x16] & 0x80) { 
             
+            // CH1: Nyquist Limit Check
             if (ch1_enabled && ch1_volume > 0) {
                 uint16_t freq_raw = apu_ram[0x03] | ((apu_ram[0x04] & 0x07) << 8);
                 float freq_hz = 131072.0f / (2048.0f - freq_raw);
-                ch1_phase += freq_hz / 44100.0f;
-                if (ch1_phase >= 1.0f) ch1_phase -= 1.0f;
-                ch1_out = (ch1_phase < DUTY_CYCLES[apu_ram[0x01] >> 6]) ? 1.0f : -1.0f;
-                ch1_out *= ((ch1_volume / 15.0f) * 0.05f);
+                if (freq_hz > 22000.0f) {
+                    ch1_out = 0.0f;
+                } else {
+                    ch1_phase += freq_hz / 44100.0f;
+                    if (ch1_phase >= 1.0f) ch1_phase -= 1.0f;
+                    ch1_out = (ch1_phase < DUTY_CYCLES[apu_ram[0x01] >> 6]) ? 1.0f : -1.0f;
+                    ch1_out *= ((ch1_volume / 15.0f) * 0.025f); 
+                }
             }
 
+            // CH2: Nyquist Limit Check
             if (ch2_enabled && ch2_volume > 0) {
                 uint16_t freq_raw = apu_ram[0x08] | ((apu_ram[0x09] & 0x07) << 8);
                 float freq_hz = 131072.0f / (2048.0f - freq_raw);
-                ch2_phase += freq_hz / 44100.0f;
-                if (ch2_phase >= 1.0f) ch2_phase -= 1.0f;
-                ch2_out = (ch2_phase < DUTY_CYCLES[apu_ram[0x06] >> 6]) ? 1.0f : -1.0f;
-                ch2_out *= ((ch2_volume / 15.0f) * 0.05f);
+                if (freq_hz > 22000.0f) {
+                    ch2_out = 0.0f;
+                } else {
+                    ch2_phase += freq_hz / 44100.0f;
+                    if (ch2_phase >= 1.0f) ch2_phase -= 1.0f;
+                    ch2_out = (ch2_phase < DUTY_CYCLES[apu_ram[0x06] >> 6]) ? 1.0f : -1.0f;
+                    ch2_out *= ((ch2_volume / 15.0f) * 0.025f);
+                }
             }
 
+            // CH3: Nyquist Limit Check
             if (ch3_enabled && (apu_ram[0x1A] & 0x80)) { 
                 uint16_t freq_raw = apu_ram[0x1D] | ((apu_ram[0x1E] & 0x07) << 8);
                 float freq_hz = 65536.0f / (2048.0f - freq_raw);
-                ch3_phase += freq_hz / 44100.0f;
-                if (ch3_phase >= 1.0f) ch3_phase -= 1.0f;
-                int sample_index = (int)(ch3_phase * 32.0f) % 32;
-                uint8_t wave_byte = apu_ram[0x20 + (sample_index / 2)];
-                uint8_t wave_sample = (sample_index % 2 == 0) ? (wave_byte >> 4) : (wave_byte & 0x0F);
-                uint8_t vol_code = (apu_ram[0x1C] >> 5) & 0x03;
-                float vol_mult = (vol_code == 1) ? 1.0f : (vol_code == 2) ? 0.5f : (vol_code == 3) ? 0.25f : 0.0f;
-                ch3_out = ((wave_sample / 7.5f) - 1.0f) * (vol_mult * 0.05f);
+                if (freq_hz > 22000.0f) {
+                    ch3_out = 0.0f;
+                } else {
+                    ch3_phase += freq_hz / 44100.0f;
+                    if (ch3_phase >= 1.0f) ch3_phase -= 1.0f;
+                    int sample_index = (int)(ch3_phase * 32.0f) % 32;
+                    uint8_t wave_byte = apu_ram[0x20 + (sample_index / 2)];
+                    uint8_t wave_sample = (sample_index % 2 == 0) ? (wave_byte >> 4) : (wave_byte & 0x0F);
+                    uint8_t vol_code = (apu_ram[0x1C] >> 5) & 0x03;
+                    float vol_mult = (vol_code == 1) ? 1.0f : (vol_code == 2) ? 0.5f : (vol_code == 3) ? 0.25f : 0.0f;
+                    ch3_out = ((wave_sample / 7.5f) - 1.0f) * (vol_mult * 0.025f);
+                }
             }
 
             if (ch4_enabled && ch4_volume > 0) {
-                ch4_out = (((lfsr & 0x01) == 0) ? 1.0f : -1.0f) * ((ch4_volume / 15.0f) * 0.05f);
+                ch4_out = (((lfsr & 0x01) == 0) ? 1.0f : -1.0f) * ((ch4_volume / 15.0f) * 0.025f);
             }
         }
 
         uint8_t nr51 = apu_ram[0x15]; 
-        float left_mix = 0.0f;
-        float right_mix = 0.0f;
+        float raw_left = 0.0f;
+        float raw_right = 0.0f;
 
-        if (nr51 & 0x01) left_mix += ch1_out;
-        if (nr51 & 0x02) left_mix += ch2_out;
-        if (nr51 & 0x04) left_mix += ch3_out;
-        if (nr51 & 0x08) left_mix += ch4_out;
+        if (nr51 & 0x01) raw_left += ch1_out;
+        if (nr51 & 0x02) raw_left += ch2_out;
+        if (nr51 & 0x04) raw_left += ch3_out;
+        if (nr51 & 0x08) raw_left += ch4_out;
 
-        if (nr51 & 0x10) right_mix += ch1_out;
-        if (nr51 & 0x20) right_mix += ch2_out;
-        if (nr51 & 0x40) right_mix += ch3_out;
-        if (nr51 & 0x80) right_mix += ch4_out;
+        if (nr51 & 0x10) raw_right += ch1_out;
+        if (nr51 & 0x20) raw_right += ch2_out;
+        if (nr51 & 0x40) raw_right += ch3_out;
+        if (nr51 & 0x80) raw_right += ch4_out;
 
         //Master volume control
         uint8_t nr50 = apu_ram[0x14];
         float master_left_vol = (((nr50 >> 4) & 0x07) + 1) / 8.0f;
         float master_right_vol = ((nr50 & 0x07) + 1) / 8.0f;
 
-        left_mix *= master_left_vol;
-        right_mix *= master_right_vol;
+        raw_left *= master_left_vol;
+        raw_right *= master_right_vol;
 
-        if (left_mix > 1.0f) left_mix = 1.0f; else if (left_mix < -1.0f) left_mix = -1.0f;
-        if (right_mix > 1.0f) right_mix = 1.0f; else if (right_mix < -1.0f) right_mix = -1.0f;
+        // Apply High-Pass Filter to remove DC offset before queuing
+        float filtered_left = apply_hpf(raw_left, &hpf_left_prev_in, &hpf_left_prev_out);
+        float filtered_right = apply_hpf(raw_right, &hpf_right_prev_in, &hpf_right_prev_out);
 
-        audio_buffer[audio_buffer_index++] = left_mix; 
-        audio_buffer[audio_buffer_index++] = right_mix; 
+        audio_buffer[audio_buffer_index++] = filtered_left; 
+        audio_buffer[audio_buffer_index++] = filtered_right; 
 
         if (audio_buffer_index >= 1024) {
-            if (SDL_GetQueuedAudioSize(audio_device) < 8192 * sizeof(float)) {
-                SDL_QueueAudio(audio_device, audio_buffer, sizeof(audio_buffer));
+            
+            // AUDIO BACKPRESSURE: Double runway to 8192 (~90ms)
+            while (SDL_GetQueuedAudioSize(audio_device) > 8192 * sizeof(float)) {
+                SDL_Delay(1);
             }
+            
+            SDL_QueueAudio(audio_device, audio_buffer, sizeof(audio_buffer));
             audio_buffer_index = 0;
         }
     }

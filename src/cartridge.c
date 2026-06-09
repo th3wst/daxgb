@@ -94,7 +94,7 @@ bool cart_load(const char *filename) {
 
     if (ctx.ram_size > 0) {
         ctx.ram_data = (uint8_t *)malloc(ctx.ram_size);
-        memset(ctx.ram_data, 0xFF, ctx.ram_size); //0xFF default is hardware accurate
+        memset(ctx.ram_data, 0xFF, ctx.ram_size); // 0xFF default is hardware accurate
         
         build_save_filename(filename);
         FILE *save_fp = fopen(save_filename, "rb");
@@ -109,9 +109,11 @@ bool cart_load(const char *filename) {
         ctx.ram_data = NULL;
     }
 
-    mbc1_reg1 = 1; mbc1_reg2 = 0; mbc1_mode = 0;
-    ctx.rom_bank = 1; ctx.ram_bank = 0;
-    ctx.ram_enabled = false; ctx.banking_mode = 0;
+    //Initialize the active memory banking variables
+    ctx.rom_bank = 1; 
+    ctx.ram_bank = 0;
+    ctx.ram_enabled = false; 
+    ctx.banking_mode = 0;
 
     strncpy(ctx.filename, filename, sizeof(ctx.filename) - 1);
     ctx.filename[sizeof(ctx.filename) - 1] = '\0';
@@ -126,70 +128,73 @@ void cart_cleanup(void) {
 }
 
 uint8_t cart_read(uint16_t address) {
+    CartridgeContext *ctx = cart_get_context();
+
     if (address < 0x4000) {
-        return ctx.rom_data[address];
+        // ROM Bank 0 (Always fixed at the start of the ROM)
+        return ctx->rom_data[address];
+        
     } else if (address < 0x8000) {
-        uint8_t bank = ctx.rom_bank;
-        if (ctx.mbc_type == MBC_1 && (bank == 0 || bank == 0x20 || bank == 0x40 || bank == 0x60)) bank++;
-        uint32_t mapped_address = (bank * 0x4000) + (address - 0x4000);
-        if (mapped_address < ctx.rom_size) return ctx.rom_data[mapped_address];
+        // Switchable ROM Bank (The dynamic window)
+        // Offset = (Address within window) + (Bank Number * 16KB)
+        uint32_t offset = (address - 0x4000) + (ctx->rom_bank * 0x4000);
+        
+        // Modulo against rom_size prevents segfaults if the bank number goes out of bounds
+        return ctx->rom_data[offset % ctx->rom_size];
+        
     } else if (address >= 0xA000 && address < 0xC000) {
-        if (ctx.ram_enabled && ctx.ram_data) {
-            //Safely block RTC register reads to prevent checksum corruption
-            if (ctx.mbc_type == MBC_3 && ctx.ram_bank >= 0x08 && ctx.ram_bank <= 0x0C) {
-                return 0x00; 
-            }
-            
-            uint32_t mapped_address = (ctx.ram_bank * 0x2000) + (address - 0xA000);
-            if (mapped_address < ctx.ram_size) {
-                return ctx.ram_data[mapped_address];
+        // Cartridge External RAM
+        if (ctx->ram_enabled && ctx->ram_data != NULL) {
+            uint32_t offset = (address - 0xA000) + (ctx->ram_bank * 0x2000);
+            if (offset < ctx->ram_size) {
+                return ctx->ram_data[offset];
             }
         }
+        return 0xFF; // Open bus behavior if RAM is disabled
     }
+    
     return 0xFF;
 }
 
 void cart_write(uint16_t address, uint8_t data) {
-    if (ctx.mbc_type == MBC_NONE) return;
+    CartridgeContext *ctx = cart_get_context();
 
     if (address < 0x2000) {
-        bool enable = ((data & 0x0F) == 0x0A);
-        if (ctx.ram_enabled && !enable) save_battery_ram();
-        ctx.ram_enabled = enable;
+        //RAM Enable/Disable
+        ctx->ram_enabled = ((data & 0x0F) == 0x0A);
+        
     } else if (address < 0x4000) {
-        if (ctx.mbc_type == MBC_1) {
-            mbc1_reg1 = data & 0x1F;
-            if (mbc1_reg1 == 0) mbc1_reg1 = 1;
-            update_mbc1_banks();
-        } else if (ctx.mbc_type == MBC_3) {
-            uint8_t bank = data & 0x7F;
-            if (bank == 0) bank = 1;
-            ctx.rom_bank = bank;
-            ctx.rom_bank %= (ctx.rom_size / 0x4000);
-        } else if (ctx.mbc_type == MBC_5) {
-            ctx.rom_bank = data; 
-            ctx.rom_bank %= (ctx.rom_size / 0x4000);
+        // ROM Bank Number (Lower 5 bits)
+        ctx->rom_bank = (ctx->rom_bank & 0xE0) | (data & 0x1F);
+        
+        // MBC1 Hardware Quirk: Bank 0 is physically wired to Bank 1
+        if (ctx->rom_bank == 0) {
+            ctx->rom_bank = 1; 
         }
+        
     } else if (address < 0x6000) {
-        if (ctx.mbc_type == MBC_1) {
-            mbc1_reg2 = data & 0x03;
-            update_mbc1_banks();
+        // RAM Bank Number OR Upper 2 bits of ROM Bank
+        if (ctx->banking_mode == 1) {
+            ctx->ram_bank = data & 0x03;
         } else {
-            ctx.ram_bank = data & 0x0F;
+            // Apply data to the upper bits of the ROM bank
+            ctx->rom_bank = (ctx->rom_bank & 0x1F) | ((data & 0x03) << 5);
+            if (ctx->rom_bank == 0) ctx->rom_bank = 1;
         }
+        
     } else if (address < 0x8000) {
-        if (ctx.mbc_type == MBC_1) {
-            mbc1_mode = data & 0x01;
-            update_mbc1_banks();
+        // Banking Mode Select (0 = ROM Banking Mode, 1 = RAM Banking Mode)
+        ctx->banking_mode = data & 0x01;
+        if (ctx->banking_mode == 0) {
+            ctx->ram_bank = 0; // Lock RAM to bank 0 in simple mode
         }
+        
     } else if (address >= 0xA000 && address < 0xC000) {
-        if (ctx.ram_enabled && ctx.ram_data) {
-            //Safely block RTC register writes
-            if (ctx.mbc_type == MBC_3 && ctx.ram_bank >= 0x08 && ctx.ram_bank <= 0x0C) return;
-            
-            uint32_t mapped_address = (ctx.ram_bank * 0x2000) + (address - 0xA000);
-            if (mapped_address < ctx.ram_size) {
-                ctx.ram_data[mapped_address] = data;
+        // Write actual data to the Cartridge SRAM
+        if (ctx->ram_enabled && ctx->ram_data != NULL) {
+            uint32_t offset = (address - 0xA000) + (ctx->ram_bank * 0x2000);
+            if (offset < ctx->ram_size) {
+                ctx->ram_data[offset] = data;
             }
         }
     }
@@ -198,13 +203,13 @@ void cart_write(uint16_t address, uint8_t data) {
 void cart_save_state(FILE *f) {
     CartridgeContext *ctx = cart_get_context();
     
-    /* We don't save the ROM array (too big, never changes), just the active banking state */
+    //Save active banking state
     fwrite(&ctx->ram_enabled, sizeof(bool), 1, f);
     fwrite(&ctx->rom_bank, sizeof(uint32_t), 1, f);
     fwrite(&ctx->ram_bank, sizeof(uint32_t), 1, f);
     fwrite(&ctx->banking_mode, sizeof(uint8_t), 1, f);
     
-    /* If the cartridge has RAM (SRAM), we absolutely must save it! */
+    // If the cartridge has SRAM, save it
     if (ctx->ram_size > 0 && ctx->ram_data != NULL) {
         fwrite(ctx->ram_data, 1, ctx->ram_size, f);
     }

@@ -1,10 +1,15 @@
 #include <string.h>
+#include <stdio.h> // for putchar and fflush
 #include "../include/mmu.h"
 #include "../include/cartridge.h"
 #include "../include/timer.h"
 #include "../include/ppu.h"
 #include "../include/joypad.h"
 #include "../include/apu.h"
+
+//Char buffer
+static char serial_buffer[256];
+static int serial_index = 0;
 
 //VRAM and OAM are owned by the PPU
 static uint8_t wram[0x2000];
@@ -95,12 +100,37 @@ void mmu_write8(uint16_t address, uint8_t data) {
             joypad_write(data);
             return;
         }
-        // Route Serial Transfer (Stubbed) - This will probably stay stubbed for a while lol
+        
+        // Route Serial Transfer (Blargg Test Output Hook)
         if (address == 0xFF02) {
-            // Clear bit 7 immediately to fake a finished serial transfer
-            io[0x02] = data & 0x7F; 
+            io[0x02] = data; 
+            
+            if (data == 0x81) {
+                char c = (char)io[0x01]; 
+                
+                putchar(c);
+                fflush(stdout); 
+                
+                // Add to our internal buffer for the Auto-Quit check
+                if (serial_index < 255) {
+                    serial_buffer[serial_index++] = c;
+                    serial_buffer[serial_index] = '\0'; // Keep it null-terminated
+                    
+                    // Check if the test has concluded
+                    if (strstr(serial_buffer, "Passed")) {
+                        printf("\n[TEST MODE] Auto-exiting (Success).\n");
+                        exit(0); 
+                    } else if (strstr(serial_buffer, "Failed")) {
+                        printf("\n[TEST MODE] Auto-exiting (Failure).\n");
+                        exit(1); 
+                    }
+                }
+                
+                io[0x02] &= 0x7F; 
+            }
             return;
         }
+        
         // Route Timer Registers
         if (address >= 0xFF04 && address <= 0xFF07) {
             timer_write(address, data);
@@ -151,9 +181,9 @@ void mmu_save_state(FILE *f) {
 }
 
 void mmu_load_state(FILE *f) {
-    fread(wram, 1, sizeof(wram), f);
-    fread(hram, 1, sizeof(hram), f);
-    fread(io, 1, sizeof(io), f);
-    fread(&ie_register, sizeof(uint8_t), 1, f);
-    fread(&if_register, sizeof(uint8_t), 1, f);
+    (void)fread(wram, 1, sizeof(wram), f);
+    (void)fread(hram, 1, sizeof(hram), f);
+    (void)fread(io, 1, sizeof(io), f);
+    (void)fread(&ie_register, sizeof(uint8_t), 1, f);
+    (void)fread(&if_register, sizeof(uint8_t), 1, f);
 }

@@ -4,3 +4,4 @@ daxgb_emulator
 *.state
 *.log
 *.sav
+tests/*.gb

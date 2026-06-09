@@ -1,30 +1,52 @@
 # daxgb
 
-A minimalist, high-performance Game Boy emulator built in C. Designed for systems-level educational purposes and retro-hardware experimentation.
+A minimalist, high-performance Game Boy emulator written in C.
+
+Designed for systems-level educational purposes and retro-hardware experimentation.
+
+---
 
 ## Screenshots
 
+### Pokémon Red
 ![Pokémon Red](screenshots/pokemonred.png)
 
+### Wario Land
 ![Wario Land](screenshots/warioland.png)
 
+### Debugger
 ![Debugger](screenshots/debugger.png)
 
-## Features & Functionality
+---
 
-- Full support for the DMG-01 (original Game Boy) architecture.
-- Accurate CPU timing and memory management.
-- Pixel-perfect rendering with support for background, window, and sprite layers.
-- Multi-channel audio generation supporting Square Wave, Noise, and Wave channels.
-- Save state serialization and deserialization.
-- Built-in terminal debugger with instruction disassembly and FPS monitoring.
+## Features
+
+- Full support for the DMG-01 (original Game Boy) architecture
+- Passes 100% of Blargg's CPU instruction test suite
+- Pixel-perfect rendering with support for:
+  - Background layer
+  - Window layer
+  - Sprite layer
+- Multi-channel audio generation:
+  - Square Wave channels
+  - Wave channel
+  - Noise channel
+  - Integrated DC-offset high-pass filtering
+- Save state serialization and deserialization ("Time Travel")
+- Built-in terminal debugger
+- Instruction disassembly
+- FPS monitoring
+
+---
 
 ## Known Limitations
 
-- Audio currently experiences timing-related artifacts and synchronization issues.
-- MBC3 Real-Time Clock (RTC) support is currently a stub.
-- Serial port / Link Cable support is stubbed to bypass hardware-check hangs.
-- Does not yet pass the complete Blargg test suite; minor edge-case timing inaccuracies may exist.
+- Audio may experience minor timing-related artifacts during heavy hardware sweep operations
+- MBC3 Real-Time Clock (RTC) support is currently a stub
+- Serial Port / Link Cable support is stubbed for commercial games
+  - ASCII telemetry routing is fully functional for test ROMs
+
+---
 
 ## Quick Start
 
@@ -32,7 +54,7 @@ A minimalist, high-performance Game Boy emulator built in C. Designed for system
 
 - GCC
 - Make
-- SDL2 Development Libraries (`libsdl2`)
+- SDL2 Development Libraries (`libsdl2-dev`)
 
 ### Build
 
@@ -40,29 +62,61 @@ A minimalist, high-performance Game Boy emulator built in C. Designed for system
 make
 ```
 
-### Usage
+### Run
 
 ```bash
-./daxgb_emulator [-d] <path_to_rom.gb>
+./daxgb_emulator [-d | -t] <path_to_rom.gb>
 ```
 
-### Options
+---
 
-- `-d` or `--debug` : Launch emulator in debugger mode.
+## Command Line Options
+
+| Option | Description |
+|----------|-------------|
+| `-d` | Launch emulator in interactive debugger mode |
+| `--debug` | Same as `-d` |
+| `-t` | Launch headlessly at uncapped speed for automated testing |
+| `--test` | Same as `-t` |
+
+---
+
+## Testing
+
+Run the automated CPU test suite:
+
+```bash
+./run_tests.sh
+```
+
+> **Note:** Requires Blargg's instruction test ROMs to be placed inside the `tests/` directory.
+
+---
 
 ## Controls
 
-- D-Pad: Arrow Keys
-- A: Z
-- B: X
-- Start: Enter
-- Select: Backspace
-- Toggle FPS Display: F
-- Save State: O
-- Load State: L
+D-Pad: Arrow Keys
+
+A: Z
+
+B: X
+
+Start: Enter
+
+Select: Backspace
+
+Toggle FPS Display: F
+
+Save State: O
+
+Load State: L
+
+---
 
 ## Debugger Controls
 
-- Ctrl+C: Pause execution and enter debugger.
-- s: Step one instruction.
-- r: Print CPU registers and current instruction disassembly.
+Pause Execution / Enter Debugger: Ctrl+C
+
+Step One Instruction: S
+
+Print Registers & Current Disassembly: R

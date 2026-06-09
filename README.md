@@ -8,14 +8,13 @@ Designed for systems-level educational purposes and retro-hardware experimentati
 
 ## Screenshots
 
-### Pokémon Red
-![Pokémon Red](screenshots/pokemonred.png)
+| Pokémon Red | Wario Land |
+|------------|------------|
+| ![](screenshots/pokemonred.png) | ![](screenshots/warioland.png) |
 
-### Wario Land
-![Wario Land](screenshots/warioland.png)
-
-### Debugger
-![Debugger](screenshots/debugger.png)
+| Debugger |
+|----------|
+| ![](screenshots/debugger.png) |
 
 ---
 

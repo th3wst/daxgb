@@ -32,4 +32,7 @@ CPUContext* cpu_get_context(void);
 
 void cpu_print_log(void);
 
+void cpu_save_state(FILE *f);
+void cpu_load_state(FILE *f);
+
 #endif //CPU_H

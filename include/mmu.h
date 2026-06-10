@@ -15,4 +15,8 @@ uint16_t mmu_read16(uint16_t address);
 //Writes a 16-bit value in little-endian order
 void mmu_write16(uint16_t address, uint16_t data);
 
+#include <stdio.h>
+void mmu_save_state(FILE *f);
+void mmu_load_state(FILE *f);
+
 #endif // MMU_H
